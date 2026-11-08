@@ -1,0 +1,118 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: gmc-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: gmc
+      POSTGRES_PASSWORD: gmc
+      POSTGRES_DB: gmc
+    ports:
+      - "5432:5432"
+    volumes:
+      - gmc_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gmc -d gmc"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+      target: tools
+    container_name: gmc-migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      GOOSE_DRIVER: postgres
+      GOOSE_DBSTRING: postgres://gmc:gmc@postgres:5432/gmc?sslmode=disable
+    command: ["goose", "-dir", "/app/db/migrations", "up"]
+    restart: "no"
+
+  seed:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+      target: tools
+    container_name: gmc-seed
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      DATABASE_URL: postgres://gmc:gmc@postgres:5432/gmc?sslmode=disable
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@gmc.local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-AdminGMC2026!Secure}
+      STORE_NAME: ${STORE_NAME:-Global Mandiri Computer}
+      WHATSAPP_NUMBER: ${WHATSAPP_NUMBER:-6282232554674}
+    command: ["/app/seed", "-csv", "/app/db/seed/products.csv"]
+    restart: "no"
+
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+      target: runner
+    container_name: gmc-api
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      seed:
+        condition: service_completed_successfully
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      SITE_URL: ${SITE_URL:-http://localhost:3000}
+      API_PORT: 8080
+      DATABASE_URL: postgres://gmc:gmc@postgres:5432/gmc?sslmode=disable
+      JWT_SECRET: ${JWT_SECRET:-gmc-dev-jwt-secret-key-minimum-32-chars-2026}
+      ACCESS_TTL: ${ACCESS_TTL:-15m}
+      REFRESH_TTL: ${REFRESH_TTL:-720h}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      COOKIE_SAMESITE: ${COOKIE_SAMESITE:-Lax}
+      REFRESH_COOKIE_PATH: ${REFRESH_COOKIE_PATH:-/}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-127.0.0.1/32,::1/128,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}
+      WHATSAPP_NUMBER: ${WHATSAPP_NUMBER:-6282232554674}
+      STORE_NAME: ${STORE_NAME:-Global Mandiri Computer}
+      STORE_TZ: ${STORE_TZ:-Asia/Jakarta}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@gmc.local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-AdminGMC2026!Secure}
+      TOTP_ENC_KEY: ${TOTP_ENC_KEY:-MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=}
+      UPLOAD_DIR: /data/uploads
+      WEB_INTERNAL_URL: http://web:3000
+      REVALIDATE_SECRET: ${REVALIDATE_SECRET:-gmc-internal-revalidate-secret-2026}
+    ports:
+      - "8080:8080"
+    volumes:
+      - gmc_uploads:/data/uploads
+    healthcheck:
+      test: ["CMD", "/app/api", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: gmc-web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      SITE_URL: ${SITE_URL:-http://localhost:3000}
+      API_INTERNAL_URL: http://api:8080
+      REVALIDATE_SECRET: ${REVALIDATE_SECRET:-gmc-internal-revalidate-secret-2026}
+    ports:
+      - "3000:3000"
+
+volumes:
+  gmc_pgdata:
+  gmc_uploads:
